@@ -1,0 +1,22 @@
+document:
+  dsl: 1.0.0
+  taskQueue: try-only-do
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - guarded:
+      try:
+        - inner:
+            do:
+              - step:
+                  set:
+                    inTry: true
+      catch:
+        as: error
+        do:
+          - caught:
+              set:
+                catchRan: true
+  - after:
+      set:
+        after: true
