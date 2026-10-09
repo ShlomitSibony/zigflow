@@ -408,9 +408,9 @@ func TestSetTaskBuilderReplayUsesSingleRecordedSideEffect(t *testing.T) {
 // On replay the SideEffect closure does not run, so the error must come from
 // the recorded marker. The replayer does not compare failure messages, so
 // the test captures the task's error during replay and compares it with the
-// first execution. The parent try task reads the child failure from its own
-// history, so the catch branch receives what the try child originally
-// failed with; the replayed try child must fail with that same error.
+// first execution. The try task catches the failure the set task returns, so
+// the catch body receives what the try body originally failed with; the
+// replayed try body must fail with that same error.
 func TestSetTaskBuilderReplayFailedExpression(t *testing.T) {
 	const expressionErr = "set-expression-failed"
 
@@ -425,8 +425,8 @@ func TestSetTaskBuilderReplayFailedExpression(t *testing.T) {
 		return state
 	}
 
-	// First execution: the set task runs as the try child and the catch
-	// child captures the error it is given.
+	// First execution: the set task runs as the inline try body and the catch
+	// body captures the error it is given.
 	setBuilder, err := NewSetTaskBuilder(nil, &model.SetTask{Set: set}, setTaskName, nil, testEvents, nil)
 	require.NoError(t, err)
 	setFn, err := setBuilder.Build()
@@ -438,30 +438,29 @@ func TestSetTaskBuilderReplayFailedExpression(t *testing.T) {
 			Try:   &model.TaskList{},
 			Catch: &model.TryTaskCatch{Do: &model.TaskList{}},
 		},
-		tryChildWorkflowName:   "try-set-child",
-		catchChildWorkflowName: "catch-set-child",
 	}
-	tryFn, err := tryBuilder.exec()
-	require.NoError(t, err)
 
 	recorder := newSideEffectRecorder()
+
+	var firstErr error
+	trackedSetFn := func(ctx workflow.Context, input any, st *utils.State) (any, error) {
+		out, err := setFn(ctx, input, st)
+		firstErr = err
+		return out, err
+	}
+
+	var caught map[string]any
+	catchFn := func(ctx workflow.Context, input any, st *utils.State) (any, error) {
+		caught, _ = st.Data["error"].(map[string]any)
+		return map[string]any{testConstHandledKey: true}, nil
+	}
+
+	tryFn, err := tryBuilder.exec(trackedSetFn, catchFn)
+	require.NoError(t, err)
 
 	var s testsuite.WorkflowTestSuite
 	env := s.NewTestWorkflowEnvironment()
 	env.SetDataConverter(recorder)
-
-	var firstErr error
-	env.RegisterWorkflowWithOptions(func(ctx workflow.Context, input any, st *utils.State) (any, error) {
-		out, err := setFn(ctx, input, st)
-		firstErr = err
-		return out, err
-	}, workflow.RegisterOptions{Name: tryBuilder.tryChildWorkflowName})
-
-	var caught map[string]any
-	env.RegisterWorkflowWithOptions(func(ctx workflow.Context, input any, st *utils.State) (map[string]any, error) {
-		caught, _ = st.Data["error"].(map[string]any)
-		return map[string]any{testConstHandledKey: true}, nil
-	}, workflow.RegisterOptions{Name: tryBuilder.catchChildWorkflowName})
 
 	env.RegisterWorkflowWithOptions(func(ctx workflow.Context) (any, error) {
 		return tryFn(ctx, nil, newState())
@@ -479,11 +478,11 @@ func TestSetTaskBuilderReplayFailedExpression(t *testing.T) {
 	require.NotNil(t, caught, "catch should receive the error under $data.error")
 	assert.Contains(t, caught[testConstMessage], expressionErr, "catch should see the original expression error")
 
-	// Replay the try child from a history holding the recorded marker.
+	// Replay the try body from a history holding the recorded marker.
 	state := newState()
 	_, replayTaskErr, replayErr := replaySetTask(t, set, state, setTaskHistory(t, true, recorder.markers[0]))
 	require.NoError(t, replayErr)
-	require.Error(t, replayTaskErr, "the replayed try child must still fail so catch behaviour is unchanged")
+	require.Error(t, replayTaskErr, "the replayed try body must still fail so catch behaviour is unchanged")
 	assert.Equal(t, firstErr.Error(), replayTaskErr.Error(), "replay must reproduce the first execution error")
 	assert.Contains(t, replayTaskErr.Error(), "error running runtime expression")
 	assert.Contains(t, replayTaskErr.Error(), expressionErr)
