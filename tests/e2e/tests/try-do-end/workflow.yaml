@@ -1,0 +1,28 @@
+document:
+  dsl: 1.0.0
+  taskQueue: try-do-end
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - guarded:
+      try:
+        # The inner `do` runs inline in the try body. `then: end` inside it
+        # must still end the whole workflow, not just the inner task list.
+        - inner:
+            do:
+              - finish:
+                  set:
+                    result: ended
+                  then: end
+        - stillInTry:
+            set:
+              inTry: true
+      catch:
+        as: error
+        do:
+          - caught:
+              set:
+                catchRan: true
+  - mustNotRun:
+      set:
+        afterTry: true

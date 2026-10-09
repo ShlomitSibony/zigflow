@@ -1,0 +1,32 @@
+document:
+  dsl: 1.0.0
+  taskQueue: try-switch-to-do
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - guarded:
+      try:
+        - pick:
+            switch:
+              - go:
+                  when: ${ true }
+                  then: target
+              - default:
+                  then: continue
+        - skipped:
+            set:
+              skipped: true
+        - target:
+            do:
+              - mark:
+                  set:
+                    targeted: true
+      catch:
+        as: error
+        do:
+          - caught:
+              set:
+                catchRan: true
+  - after:
+      set:
+        after: true

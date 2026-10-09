@@ -48,6 +48,9 @@ type DoTaskOpts struct {
 	// so `then: end` inside an inline body ends the whole workflow instead
 	// of being consumed as a clean root completion.
 	//
+	// Build also marks any do task that runs inline in a nested body as
+	// nested, because NewTaskBuilder only gives it the default options.
+	//
 	// It is deliberately separate from DisableRegisterWorkflow: the
 	// for-task also disables registration for its inner body but then
 	// invokes it inside a registered child workflow, where the existing
@@ -123,6 +126,15 @@ func (t *DoTaskBuilder) Build() (TemporalWorkflowFunc, error) {
 			return nil, fmt.Errorf("error creating task builder: %w", err)
 		}
 
+		// A do task that runs inline in a nested body must be nested like its
+		// parent. NewTaskBuilder only has the default options, and a non-nested
+		// do swallows `then: end` and may continue as new. A do task after the
+		// first non-do task is not run inline: it is only a redirect target, run
+		// as a child workflow, so it keeps the default options.
+		if inner, ok := builder.(*DoTaskBuilder); ok && t.opts.Nested && addTasks {
+			inner.opts.Nested = true
+		}
+
 		// Build the task and store it for use
 		l.Debug().Msg("Building task")
 		fn, err := builder.Build()
@@ -142,16 +154,25 @@ func (t *DoTaskBuilder) Build() (TemporalWorkflowFunc, error) {
 	// Execute the workflow
 	wf := t.workflowExecutor(tasks)
 
-	if !t.opts.DisableRegisterWorkflow {
-		if hasNoDo {
-			log.Debug().Str("name", t.GetTaskName()).Msg("Registering workflow")
-			t.temporalWorker.RegisterWorkflowWithOptions(wf, workflow.RegisterOptions{
-				Name: t.GetTaskName(),
-			})
-		}
+	if !t.opts.DisableRegisterWorkflow && hasNoDo {
+		t.registerWorkflow(tasks)
 	}
 
 	return wf, nil
+}
+
+// registerWorkflow registers the task list as a workflow, so a switch can
+// redirect to it as a child workflow. A child workflow is its own Temporal
+// execution, so the registered function is never nested, even when this task
+// list also runs inline in a nested body.
+func (t *DoTaskBuilder) registerWorkflow(tasks []workflowFunc) {
+	standalone := *t
+	standalone.opts.Nested = false
+
+	log.Debug().Str("name", t.GetTaskName()).Msg("Registering workflow")
+	t.temporalWorker.RegisterWorkflowWithOptions(standalone.workflowExecutor(tasks), workflow.RegisterOptions{
+		Name: t.GetTaskName(),
+	})
 }
 
 func (t *DoTaskBuilder) PostLoad() error {
@@ -237,13 +258,7 @@ func (t *DoTaskBuilder) workflowExecutor(tasks []workflowFunc) TemporalWorkflowF
 			}
 		}
 
-		t.eventEmitter.Emit(context.Background(), "workflow.started", func(e *ceSDK.Event) {
-			e.SetID(workflow.GetInfo(ctx).WorkflowExecution.ID)
-			_ = e.SetData(ceSDK.ApplicationJSON, map[string]any{
-				constKeyInput: input,
-				constKeyState: state,
-			})
-		})
+		t.emitWorkflowStarted(ctx, input, state)
 
 		// Iterate through the tasks to create the workflow. An `end` flow
 		// directive propagates outward as flow.ErrEnd. There are three
@@ -251,30 +266,20 @@ func (t *DoTaskBuilder) workflowExecutor(tasks []workflowFunc) TemporalWorkflowF
 		//
 		//   true root workflow    consumes flow.ErrEnd as a successful
 		//                         workflow completion.
-		//   nested inline body    returns flow.ErrEnd unchanged with its
-		//                         effective output, so the invoking task
-		//                         (e.g. TryTaskBuilder.exec) keeps
-		//                         propagating end outward.
-		//   child workflow        re-emits ErrEnd as a serialisable
-		//                         Temporal ApplicationError so the parent
-		//                         can decode it and carry on propagating.
+		//   nested inline body    (a try, catch or for body, or a do task
+		//                         inside one) returns flow.ErrEnd unchanged
+		//                         with its effective output, so the
+		//                         invoking task keeps propagating end.
+		//   child workflow        (e.g. `run: workflow`, a fork branch or
+		//                         a redirect target) re-emits it as a
+		//                         Temporal ApplicationError carrying
+		//                         state.Output, which the parent decodes
+		//                         with flow.DecodeEndApplicationError.
 		//
 		// The nested case must be explicit: an inline body shares the
 		// enclosing workflow's Temporal context, so isRootWorkflow(ctx)
 		// cannot tell it apart from the true root and would otherwise
-		// swallow the end directive, letting the catch body and every
-		// task after the containing try keep running.
-		//
-		// Without the child workflow re-emission, ErrEnd would be
-		// silently swallowed by every child workflow boundary and
-		// `then: end` could only end the innermost scope rather than the
-		// overall workflow.
-		//
-		// state.Output is included in the end signal so the nested
-		// scope's effective output survives the boundary; the parent's
-		// executeRedirect decodes it and applies the originating task's
-		// output/export directives to it before propagating end further
-		// upward.
+		// swallow the end directive.
 		if err := t.iterateTasks(ctx, tasks, input, state); err != nil {
 			if !errors.Is(err, flow.ErrEnd) {
 				return nil, err
@@ -287,15 +292,41 @@ func (t *DoTaskBuilder) workflowExecutor(tasks []workflowFunc) TemporalWorkflowF
 			}
 		}
 
-		t.eventEmitter.Emit(context.Background(), "workflow.completed", func(e *ceSDK.Event) {
-			e.SetID(workflow.GetInfo(ctx).WorkflowExecution.ID)
-			_ = e.SetData(ceSDK.ApplicationJSON, map[string]any{
-				"output": state.Output,
-			})
-		})
+		t.emitWorkflowCompleted(ctx, state)
 
 		return state.Output, nil
 	}
+}
+
+// emitWorkflowStarted does nothing for a nested body. It shares the enclosing
+// workflow's execution ID, so emitting would report a second start for it.
+func (t *DoTaskBuilder) emitWorkflowStarted(ctx workflow.Context, input any, state *utils.State) {
+	if t.opts.Nested {
+		return
+	}
+
+	t.eventEmitter.Emit(context.Background(), "workflow.started", func(e *ceSDK.Event) {
+		e.SetID(workflow.GetInfo(ctx).WorkflowExecution.ID)
+		_ = e.SetData(ceSDK.ApplicationJSON, map[string]any{
+			constKeyInput: input,
+			constKeyState: state,
+		})
+	})
+}
+
+// emitWorkflowCompleted does nothing for a nested body, for the same reason as
+// emitWorkflowStarted.
+func (t *DoTaskBuilder) emitWorkflowCompleted(ctx workflow.Context, state *utils.State) {
+	if t.opts.Nested {
+		return
+	}
+
+	t.eventEmitter.Emit(context.Background(), "workflow.completed", func(e *ceSDK.Event) {
+		e.SetID(workflow.GetInfo(ctx).WorkflowExecution.ID)
+		_ = e.SetData(ceSDK.ApplicationJSON, map[string]any{
+			"output": state.Output,
+		})
+	})
 }
 
 func (t *DoTaskBuilder) continueAsNew(

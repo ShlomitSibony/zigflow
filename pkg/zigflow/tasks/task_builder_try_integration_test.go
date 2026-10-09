@@ -67,6 +67,10 @@ const (
 	testConstFailingTask = "failing"
 	// testConstFinishTask is the key of the try-body task that emits `then: end`.
 	testConstFinishTask = "finish"
+	// testConstWorkflowStartedEvent is the emitted cloudevent type for the start of a workflow.
+	testConstWorkflowStartedEvent = "dev.zigflow.workflow.started"
+	// testConstWorkflowCompletedEvent is the emitted cloudevent type for the completion of a workflow.
+	testConstWorkflowCompletedEvent = "dev.zigflow.workflow.completed"
 )
 
 // newStartedTaskRecorder wires a cloudevents.Events instance to a temp
@@ -593,4 +597,40 @@ func TestNestedDoTaskBuilderNeverContinuesAsNew(t *testing.T) {
 
 	assert.False(t, nestedWantsCAN, "a nested inline task list must never initiate Continue-As-New")
 	assert.True(t, rootWantsCAN, "the non-nested builder must still honour the history-length override")
+}
+
+// TestBuiltTryBodiesEmitOneWorkflowLifecycle proves the inline try and catch
+// bodies do not report a second workflow start or completion for the workflow
+// they run in, however many bodies run.
+func TestBuiltTryBodiesEmitOneWorkflowLifecycle(t *testing.T) {
+	doc := newTestWorkflowDoc("wf-inline-try-lifecycle")
+	events, readEvents := newRecordingEventsWithPayload(t)
+
+	do := &model.TaskList{
+		&model.TaskItem{Key: testConstTryTask, Task: &model.TryTask{
+			Try: &model.TaskList{&model.TaskItem{Key: testConstFailingTask, Task: newFailingRaiseTask()}},
+			Catch: &model.TryTaskCatch{Do: &model.TaskList{
+				&model.TaskItem{Key: testConstHandledKey, Task: newSetTask(map[string]any{testConstHandledKey: true})},
+			}},
+		}},
+	}
+
+	fn := buildRootWorkflow(t, newRegistryMock(), doc, events, do)
+	_, err := runRootWorkflow(t, doc.Document.Name, fn, nil)
+	require.NoError(t, err)
+
+	types := recordedEventTypes(readEvents())
+	assert.Equal(t, 1, countOf(types, testConstWorkflowStartedEvent))
+	assert.Equal(t, 1, countOf(types, testConstWorkflowCompletedEvent))
+}
+
+func countOf(values []string, want string) int {
+	count := 0
+	for _, v := range values {
+		if v == want {
+			count++
+		}
+	}
+
+	return count
 }

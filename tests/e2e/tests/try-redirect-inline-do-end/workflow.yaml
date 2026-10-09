@@ -1,0 +1,42 @@
+document:
+  dsl: 1.0.0
+  taskQueue: try-redirect-inline-do-end
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - guarded:
+      try:
+        - prep:
+            do:
+              - mark:
+                  set:
+                    prepRan: true
+              - stop:
+                  if: ${ $context.jumped == true }
+                  set:
+                    result: ended
+                  then: end
+        - flag:
+            set:
+              flagged: true
+            export:
+              as:
+                jumped: true
+        - pick:
+            switch:
+              - go:
+                  when: ${ true }
+                  then: prep
+        - mustNotRun:
+            set:
+              inTry: true
+      catch:
+        as: error
+        do:
+          - caught:
+              set:
+                catchRan: true
+                err: ${ $data.error }
+  - after:
+      set:
+        after: true
