@@ -1,0 +1,19 @@
+document:
+  dsl: 1.0.0
+  taskQueue: try-expression-error
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - guarded:
+      try:
+        - failing:
+            set:
+              value: ${ 1 + "a" }
+      catch:
+        do:
+          - caught:
+              set:
+                fields: ${ $data.error | keys }
+              output:
+                as:
+                  result: ${ . }

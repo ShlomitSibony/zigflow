@@ -32,6 +32,8 @@ import (
 	_ "github.com/zigflow/zigflow/tests/e2e/tests/run-workflow-input"
 	_ "github.com/zigflow/zigflow/tests/e2e/tests/set"
 	_ "github.com/zigflow/zigflow/tests/e2e/tests/try-end"
+	_ "github.com/zigflow/zigflow/tests/e2e/tests/try-error-fields"
+	_ "github.com/zigflow/zigflow/tests/e2e/tests/try-expression-error"
 	_ "github.com/zigflow/zigflow/tests/e2e/tests/try-only-do"
 	_ "github.com/zigflow/zigflow/tests/e2e/tests/wait-expression-duration"
 	_ "github.com/zigflow/zigflow/tests/e2e/tests/wait-until"

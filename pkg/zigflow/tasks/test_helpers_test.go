@@ -63,6 +63,12 @@ const (
 	testConstTaskAfter = "after"
 	// testConstStage is the map key "stage" used in cancellation test payloads.
 	testConstStage = "stage"
+	// testConstEnded is the output value used by tasks that end the workflow in tests.
+	testConstEnded = "ended"
+	// testConstParentStage is the state value set before a try body runs.
+	testConstParentStage = "parent"
+	// testConstMutatedStage is the state value a try body sets on its copy.
+	testConstMutatedStage = "mutated"
 	// testConstHandledKey is the map key "handled" used in try/catch tests
 	// to flag that the catch handler ran.
 	testConstHandledKey = "handled"

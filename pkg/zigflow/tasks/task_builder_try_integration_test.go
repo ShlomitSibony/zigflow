@@ -208,10 +208,8 @@ func runRootWorkflow(
 // newEndingSetTask returns a set task carrying a `then: end` directive.
 func newEndingSetTask(set map[string]any) *model.SetTask {
 	return &model.SetTask{
-		TaskBase: model.TaskBase{
-			Then: &model.FlowDirective{Value: string(model.FlowDirectiveEnd)},
-		},
-		Set: model.NewObjectOrRuntimeExpr(set),
+		Then: &model.FlowDirective{Value: string(model.FlowDirectiveEnd)},
+		Set:  model.NewObjectOrRuntimeExpr(set),
 	}
 }
 
@@ -272,7 +270,7 @@ func TestBuiltTryBodyEndTerminatesWholeWorkflow(t *testing.T) {
 		&model.TaskItem{Key: testConstTryTask, Task: &model.TryTask{
 			Try: &model.TaskList{
 				&model.TaskItem{Key: testConstFinishTask, Task: newEndingSetTask(map[string]any{
-					testConstResult: "ended",
+					testConstResult: testConstEnded,
 				})},
 			},
 			Catch: &model.TryTaskCatch{
@@ -295,7 +293,7 @@ func TestBuiltTryBodyEndTerminatesWholeWorkflow(t *testing.T) {
 	// state, so state.Output still holds what `finish` set, and the try task
 	// (a control-directive task with no output directive of its own) leaves it
 	// untouched.
-	assert.Equal(t, map[string]any{testConstResult: "ended"}, output)
+	assert.Equal(t, map[string]any{testConstResult: testConstEnded}, output)
 
 	// Only the try task and the ending task inside it ran.
 	assert.Equal(t, []string{testConstTryTask, testConstFinishTask}, readStarted())
@@ -315,10 +313,8 @@ func TestBuiltCatchBodyEndTerminatesWholeWorkflow(t *testing.T) {
 
 	do := &model.TaskList{
 		&model.TaskItem{Key: testConstTryTask, Task: &model.TryTask{
-			TaskBase: model.TaskBase{
-				Output: &model.Output{
-					As: model.NewObjectOrRuntimeExpr(map[string]any{"carried": "${ . }"}),
-				},
+			Output: &model.Output{
+				As: model.NewObjectOrRuntimeExpr(map[string]any{"carried": "${ . }"}),
 			},
 			Try: &model.TaskList{
 				&model.TaskItem{Key: testConstFailingTask, Task: newFailingRaiseTask()},
@@ -346,6 +342,41 @@ func TestBuiltCatchBodyEndTerminatesWholeWorkflow(t *testing.T) {
 
 	// The failing try task ran, the catch handler ran, and nothing after the
 	// try task ran.
+	assert.Equal(t,
+		[]string{testConstTryTask, testConstFailingTask, testConstHandledKey},
+		readStarted())
+}
+
+// TestBuiltCatchBodyEndCarriesOutputWithoutOutputDirective proves the output of
+// a catch body that emits `then: end` becomes the workflow output even when the
+// try task defines no output directive of its own. The catch body runs on a copy
+// of the state, so the output must be carried back to the enclosing state.
+func TestBuiltCatchBodyEndCarriesOutputWithoutOutputDirective(t *testing.T) {
+	doc := newTestWorkflowDoc("wf-inline-catch-end-no-output")
+	events, readStarted := newStartedTaskRecorder(t, doc)
+
+	do := &model.TaskList{
+		&model.TaskItem{Key: testConstTryTask, Task: &model.TryTask{
+			Try: &model.TaskList{
+				&model.TaskItem{Key: testConstFailingTask, Task: newFailingRaiseTask()},
+			},
+			Catch: &model.TryTaskCatch{
+				As: testConstErrorKey,
+				Do: &model.TaskList{
+					&model.TaskItem{Key: testConstHandledKey, Task: newEndingSetTask(map[string]any{
+						testConstHandledKey: true,
+					})},
+				},
+			},
+		}},
+		&model.TaskItem{Key: testConstMustNotRun, Task: newSetTask(map[string]any{testConstAfterTry: true})},
+	}
+
+	fn := buildRootWorkflow(t, newRegistryMock(), doc, events, do)
+	output, err := runRootWorkflow(t, doc.Document.Name, fn, nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{testConstHandledKey: true}, output)
 	assert.Equal(t,
 		[]string{testConstTryTask, testConstFailingTask, testConstHandledKey},
 		readStarted())

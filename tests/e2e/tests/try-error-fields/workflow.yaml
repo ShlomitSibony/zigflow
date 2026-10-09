@@ -1,0 +1,26 @@
+document:
+  dsl: 1.0.0
+  taskQueue: try-error-fields
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - guarded:
+      try:
+        - failing:
+            raise:
+              error:
+                type: https://serverlessworkflow.io/spec/1.0.0/errors/validation
+                status: 400
+                title: Boom
+      catch:
+        do:
+          # The raised error reaches the catch with its own fields, not ones
+          # flattened by a child workflow boundary.
+          - caught:
+              set:
+                type: ${ $data.error.type }
+                status: ${ $data.error.status }
+                title: ${ $data.error.title }
+              output:
+                as:
+                  result: ${ . }

@@ -17,6 +17,7 @@
 package tasks
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -55,13 +56,13 @@ type TryTaskBuilder struct {
 func (t *TryTaskBuilder) Build() (TemporalWorkflowFunc, error) {
 	tryFn, err := t.createTaskFn(tryBodyPathSegment, t.task.Try)
 	if err != nil {
-		log.Error().Str("task", t.GetTaskName()).Str("taskType", tryBodyPathSegment).Msg("Error building for workflow")
+		log.Error().Err(err).Str("task", t.GetTaskName()).Str("taskType", tryBodyPathSegment).Msg("Error building try body")
 		return nil, err
 	}
 
 	catchFn, err := t.createTaskFn(catchBodyPathSegment, t.task.Catch.Do)
 	if err != nil {
-		log.Error().Str("task", t.GetTaskName()).Str("taskType", catchBodyPathSegment).Msg("Error building for workflow")
+		log.Error().Err(err).Str("task", t.GetTaskName()).Str("taskType", catchBodyPathSegment).Msg("Error building catch body")
 		return nil, err
 	}
 
@@ -76,8 +77,8 @@ func (t *TryTaskBuilder) PostLoad() error {
 		}
 
 		if err = builder.PostLoad(); err != nil {
-			log.Error().Str("task", t.GetTaskName()).Str("taskType", taskType).Msg("Error building for workflow")
-			return fmt.Errorf("error building for post load workflow: %w", err)
+			log.Error().Err(err).Str("task", t.GetTaskName()).Str("taskType", taskType).Msg("Error running post load for body")
+			return fmt.Errorf("error running post load for %s tasks of %s: %w", taskType, t.GetTaskName(), err)
 		}
 	}
 
@@ -100,6 +101,10 @@ func (t *TryTaskBuilder) Validate() error {
 
 func (t *TryTaskBuilder) buildCatchError(err error) map[string]any {
 	out := map[string]any{}
+
+	if wfErr, ok := errors.AsType[*model.Error](err); ok {
+		addWorkflowError(out, wfErr)
+	}
 
 	if actErr, ok := errors.AsType[*temporal.ActivityError](err); ok {
 		retryStateName := actErr.RetryState().String()
@@ -163,16 +168,46 @@ func (t *TryTaskBuilder) buildCatchError(err error) map[string]any {
 	// map to the catch tasks, fall back to surfacing at least the message so
 	// `$data.error` always carries something interrogable.
 	if len(out) == 0 && err != nil {
-		out["message"] = err.Error()
+		addPlainError(out, err)
 	}
 
 	return out
+}
+
+// addPlainError exposes an error that is neither a Zigflow nor a Temporal
+// error, such as a failed expression. cause keeps the wrapped error, as it
+// was set when the error crossed a child workflow boundary.
+func addPlainError(out map[string]any, err error) {
+	out["message"] = err.Error()
+	if cause := errors.Unwrap(err); cause != nil {
+		out["cause"] = cause.Error()
+	}
+}
+
+// addWorkflowError copies the RFC 7807 fields (type, status, title, detail and
+// instance) of a Zigflow error into out. The body runs inline, so the catch
+// receives the original *model.Error rather than one flattened by a child
+// workflow boundary. message is kept for catch tasks that read it.
+func addWorkflowError(out map[string]any, wfErr *model.Error) {
+	raw, err := json.Marshal(wfErr)
+	if err == nil {
+		err = json.Unmarshal(raw, &out)
+	}
+	if err != nil {
+		log.Warn().Err(err).Msg("Unable to expose the workflow error fields to the catch")
+	}
+
+	out["message"] = wfErr.Error()
 }
 
 // createBuilder builds the body of one branch (segment is
 // tryBodyPathSegment or catchBodyPathSegment) as an unregistered,
 // inline-executed DoTaskBuilder.
 func (t *TryTaskBuilder) createBuilder(segment string, task *model.TaskList) (*DoTaskBuilder, error) {
+	if task == nil || len(*task) == 0 {
+		return nil, fmt.Errorf("no tasks detected for %s in %s", segment, t.GetTaskName())
+	}
+
 	// Create the task builder, but without registering it. Nested marks it as
 	// running inline in this workflow's context so a `then: end` inside the
 	// body propagates outward instead of being mistaken for a clean root
@@ -187,8 +222,8 @@ func (t *TryTaskBuilder) createBuilder(segment string, task *model.TaskList) (*D
 
 	// Direct construction bypasses NewTaskBuilder's path setter, so thread the
 	// branch-specific path through here. Without it both bodies would build
-	// their tasks against an empty path and identical leaf names — the same
-	// name in try and catch, or in the try body and outside the try task —
+	// their tasks against an empty path, so identical leaf names (the same
+	// name in try and catch, or in the try body and outside the try task)
 	// would collide on one per-task activity alias. childTaskPath allocates a
 	// fresh slice, so the two branches never share one.
 	builder.setTaskPath(t.childTaskPath(segment))
@@ -215,9 +250,15 @@ func (t *TryTaskBuilder) exec(tryFn, catchFn TemporalWorkflowFunc) (TemporalWork
 		logger := workflow.GetLogger(ctx)
 		logger.Info("Starting try task")
 
-		output, err := tryFn(ctx, input, state)
+		// The try body runs on a copy so that tasks which succeeded before a
+		// later one failed cannot leak $data, $context or $output into the
+		// catch body or the tasks after this one. Only its output is returned.
+		tryState := state.Clone()
+		output, err := tryFn(ctx, input, tryState)
 		if err != nil {
-			logger.Warn("Try body failed, catching the error", "error", err)
+			if isWorkflowCancelled(ctx) {
+				return nil, err
+			}
 
 			// A `then: end` directive inside the try body is a deliberate
 			// workflow termination, not a failure to be caught: surface it as
@@ -231,12 +272,14 @@ func (t *TryTaskBuilder) exec(tryFn, catchFn TemporalWorkflowFunc) (TemporalWork
 			// that may still arrive from a Temporal boundary.
 			if endPayload, isEnd := flow.DecodeEndApplicationError(err); isEnd {
 				logger.Info("Try body signalled end; propagating without running catch", "carriedOutput", endPayload.Output)
-				return endPayload.Output, flow.ErrEnd
+				return t.propagateEnd(state, endPayload.Output)
 			}
 			if errors.Is(err, flow.ErrEnd) {
 				logger.Info("Try body signalled end; propagating without running catch", "carriedOutput", output)
-				return output, flow.ErrEnd
+				return t.propagateEnd(state, output)
 			}
+
+			logger.Warn("Try body failed, catching the error", "error", err)
 
 			// Expose the caught error to the catch tasks so they can
 			// interrogate it. The Open Workflow Specification names this
@@ -267,11 +310,11 @@ func (t *TryTaskBuilder) exec(tryFn, catchFn TemporalWorkflowFunc) (TemporalWork
 				// backwards compatibility with an encoded end error.
 				if endPayload, isEnd := flow.DecodeEndApplicationError(err); isEnd {
 					logger.Info("Catch body signalled end; propagating", "carriedOutput", endPayload.Output)
-					return endPayload.Output, flow.ErrEnd
+					return t.propagateEnd(state, endPayload.Output)
 				}
 				if errors.Is(err, flow.ErrEnd) {
 					logger.Info("Catch body signalled end; propagating", "carriedOutput", output)
-					return output, flow.ErrEnd
+					return t.propagateEnd(state, output)
 				}
 
 				logger.Error("Error running catch tasks", "error", err)
@@ -281,6 +324,19 @@ func (t *TryTaskBuilder) exec(tryFn, catchFn TemporalWorkflowFunc) (TemporalWork
 
 		return output, nil
 	}, nil
+}
+
+// propagateEnd records the carried output as the enclosing state's output, as
+// the body ran on a copy, and signals end to the do-task pipeline.
+func (t *TryTaskBuilder) propagateEnd(state *utils.State, output any) (any, error) {
+	state.Output = output
+	return output, flow.ErrEnd
+}
+
+// isWorkflowCancelled reports whether the enclosing workflow has been
+// cancelled. A cancellation is not an error a catch body may handle.
+func isWorkflowCancelled(ctx workflow.Context) bool {
+	return ctx.Err() != nil
 }
 
 func (t *TryTaskBuilder) getTasks() map[string]*model.TaskList {
