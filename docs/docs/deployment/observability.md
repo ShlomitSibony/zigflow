@@ -57,6 +57,23 @@ Change the address with `--metrics-listen-address` (default `0.0.0.0:9090`).
 
 Use `--metrics-prefix` to add a prefix to all metric names.
 
+### Workflow and activity types
+
+Temporal's SDK metrics carry the `workflow_type` and `activity_type` labels.
+The bodies of `for`, `try` and `catch` tasks run in the workflow that contains
+them, so they have no `workflow_type` of their own. To attribute the
+activities they run, use the `activity_type` label. For tasks that dispatch
+built-in activities it is `<workflowType>.<task path>`. See
+[Call](/docs/dsl/tasks/call#sdk-metrics) for which tasks this covers and how the
+names are built.
+
+:::warning Migration note
+Earlier versions ran each `for` iteration and each `try` and `catch` body as a
+child workflow with a `workflow_type` of `workflow_for_<task>`,
+`workflow_try_<task>` or `workflow_catch_<task>`. Dashboards and alerts that
+filter on those values receive no data after the upgrade.
+:::
+
 ### CloudEvents metrics
 
 | Metric | Labels | Description |
@@ -127,8 +144,8 @@ variables via `.env`.
 
 | Event type | Emitted when |
 | --- | --- |
-| `dev.zigflow.workflow.started` | A workflow execution begins |
-| `dev.zigflow.workflow.completed` | A workflow execution completes successfully |
+| `dev.zigflow.workflow.started` | A workflow execution begins. The bodies of `for`, `try` and `catch` tasks do not emit their own |
+| `dev.zigflow.workflow.completed` | A workflow execution completes successfully. The bodies of `for`, `try` and `catch` tasks do not emit their own |
 | `dev.zigflow.task.started` | A task begins |
 | `dev.zigflow.task.retried` | A task is retried after failure |
 | `dev.zigflow.task.cancelled` | A task is cancelled |

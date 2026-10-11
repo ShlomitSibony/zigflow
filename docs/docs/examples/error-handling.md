@@ -36,22 +36,23 @@ do:
         do:
           - setError:
               set:
-                err: some error
+                error: ${ $data.error }
+                title: Get User error
 ```
 
 ## Explanation
 
 | Part | Purpose |
 | --- | --- |
-| `try` | Runs inner tasks as a child workflow |
+| `try` | Runs inner tasks in the same workflow |
 | `catch.do` | Runs if any task inside `try` fails |
-| `setError` | Sets a fallback value when an error is caught |
+| `setError` | Sets the caught error and a fallback title |
 
 **The `catch` block catches all errors.** There is no DSL-level
 filtering by error type. To handle different errors differently,
 inspect the error object inside the `catch` block.
 
-**The `try` block runs as a child workflow.** Inner tasks are
+**The `try` block runs in the same workflow.** Inner tasks are
 retried according to their configured retry policy before the
 `catch` block is entered.
 
@@ -101,11 +102,12 @@ Use the `raise` task to fail a workflow with a structured error:
 
 ## Expected output
 
-```json
-{
-  "err": "some error"
-}
-```
+The workflow result has two fields:
+
+- `title` is `Get User error`.
+- `error` holds the caught error. Its fields come from the underlying Temporal
+  error, so they depend on the failure. See
+  [Error handling and retries](/docs/concepts/error-handling-and-retries#the-error-object).
 
 ## Common mistakes
 

@@ -112,6 +112,25 @@ wrapping the branch.
 **Cancelling the workflow cancels every branch.** The fork waits for each
 branch to close as `CANCELED` before the workflow itself closes as `CANCELED`.
 
+**The fork completes only once every branch has closed.** When a competing
+fork has a winner, or a branch fails, the fork cancels the branches that are
+still running and waits for them to close. Each branch runs as a child workflow
+with the ID `<workflowId>_fork_<branch>`, so a fork that runs again in the same
+workflow, for example in each iteration of a [`for`](/docs/dsl/tasks/for) loop,
+reuses those IDs. Waiting means the previous run of a branch has always closed
+before the next run starts it. A branch that does not close after it is
+cancelled keeps the fork waiting.
+
+:::warning Migration note
+Earlier versions completed a competing fork as soon as the winner replied, and
+a failed fork as soon as one branch failed, without waiting for the other
+branches to close. A workflow that is still running and has already passed
+such a fork fails when it replays on the new version. Let such workflows finish
+or continue as new before you upgrade, or use
+[Temporal Worker Versioning](https://docs.temporal.io/production-deployment/worker-deployments/worker-versioning)
+to keep each running workflow on the worker build it started on.
+:::
+
 ## Related pages
 
 - [Do](/docs/dsl/tasks/do): sequential execution

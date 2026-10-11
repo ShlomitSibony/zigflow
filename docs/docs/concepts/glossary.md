@@ -24,7 +24,7 @@ See also: [Temporal docs: activities](https://docs.temporal.io/activities)
 ## Child workflow
 
 A workflow started by a parent workflow. It runs with its own history and
-can be awaited by the parent. Used internally by `fork`, `try` and certain
+can be awaited by the parent. Used internally by `fork` and certain
 `run` modes.
 
 See also: [Temporal docs: child workflows](https://docs.temporal.io/child-workflows)

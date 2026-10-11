@@ -70,11 +70,11 @@ Set `maximumAttempts: 1` to disable retries entirely for a task.
 
 Use the `try` task to catch failures and handle them gracefully.
 
-The `try` block runs as a child workflow. If any task inside it fails, the
+The `try` block runs in the same workflow. If any task inside it fails, the
 `catch` block runs instead.
 
-When a task in the `try` block fails, Zigflow executes the `catch` workflow. The
-caught error is injected into the catch workflow's `$data` state. By default it
+When a task in the `try` block fails, Zigflow executes the `catch` block. The
+caught error is injected into the catch block's `$data` state. By default it
 is available as `$data.error`, or under a custom key when `catch.as` is
 specified.
 
@@ -82,7 +82,7 @@ The output of the `try` task is whatever the `catch` block returns.
 
 ### Accessing the error
 
-The catch workflow runs with its normal workflow state. Zigflow adds the caught
+The catch block runs with its normal workflow state. Zigflow adds the caught
 error to `$data` under the key defined by `catch.as`, which defaults to `error`.
 
 ```yaml
@@ -139,14 +139,36 @@ $data.err
 
 When a custom key is used, `$data.error` is not populated.
 
-The error is scoped to the catch workflow. It is not automatically propagated
+The error is scoped to the catch block. It is not automatically propagated
 into the parent workflow state after the catch block completes. To carry it
 forward, output or export it from a task in the catch block.
 
 ### The error object
 
-Zigflow enriches the caught error with details from the underlying Temporal
-error. The object may contain fields such as:
+The fields depend on where the error came from.
+
+An error raised by Zigflow, such as a `raise` task or a `listen` timeout, has
+the [RFC 7807](https://datatracker.ietf.org/doc/html/rfc7807) fields, plus a
+`message` that summarises them:
+
+```yaml
+type: https://zigflow.dev/spec/1.0.0/errors/timeout
+status: 408
+title: Timeout Error
+detail: no matching event received within 2s
+instance: my-workflow-id
+message: "[408] Timeout Error: no matching event received within 2s (...)"
+```
+
+Use `type` to handle different errors differently inside the catch block.
+`status` is a number, and `instance` is the ID of the workflow the error came
+from.
+
+Any other error, such as a failed expression, has a `message` and, when it wraps
+another error, a `cause` with the error underneath. It has no RFC 7807 fields.
+
+Zigflow enriches any other error with details from the underlying Temporal
+error, such as a failed activity. The object may contain fields such as:
 
 ```yaml
 type:
@@ -155,16 +177,26 @@ nonRetryable:
 details:
 cause:
 activity:
-childWorkflow:
 ```
 
-The exact fields depend on the underlying Temporal error, so do not rely on any
-single field always being present.
+The exact fields depend on the underlying error, so do not rely on any single
+field always being present.
 
 :::warning Migration note
 Prior versions described the caught error as being passed to the catch workflow
 as input. The current behaviour stores the error in `$data` under the key
 defined by `catch.as`, defaulting to `error`.
+
+The `try` and `catch` blocks no longer run as child workflows, so the error is
+no longer wrapped by a child workflow boundary:
+
+- The `childWorkflow` field is no longer set.
+- For errors raised by Zigflow, `type` is now the error type URI instead of the
+  Go type name, and `nonRetryable` and `cause` are no longer set. The RFC 7807
+  fields above are set instead.
+- For a plain error, such as a failed expression, `type` and `nonRetryable` are
+  no longer set. The error object contains a `message` field and, when the error
+  wraps another, a `cause` field.
 :::
 
 ---

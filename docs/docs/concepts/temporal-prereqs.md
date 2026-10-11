@@ -133,7 +133,7 @@ In Zigflow, the `wait` task creates a Temporal durable timer.
 A child workflow is a workflow started by a parent workflow. It runs
 independently and can be awaited or left to run concurrently.
 
-In Zigflow, some tasks (such as `fork`, `try` and `run`) create child
+In Zigflow, some tasks (such as `fork` and `run`) create child
 workflows internally.
 
 ---
