@@ -1,0 +1,25 @@
+document:
+  dsl: 1.0.0
+  taskQueue: for-do-end
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - loop:
+      for:
+        in: ${ [1, 2, 3] }
+        each: number
+      do:
+        # The inner `do` runs inline in the loop body. `then: end` inside it
+        # must still end the whole workflow, not just the inner task list.
+        - inner:
+            do:
+              - finish:
+                  set:
+                    result: ended
+                  then: end
+        - stillInLoop:
+            set:
+              inLoop: true
+  - mustNotRun:
+      set:
+        afterLoop: true

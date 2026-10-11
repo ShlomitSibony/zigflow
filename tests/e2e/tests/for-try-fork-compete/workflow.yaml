@@ -1,0 +1,36 @@
+document:
+  dsl: 1.0.0
+  taskQueue: for-try-fork-compete
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - loop:
+      for:
+        in: ${ [1, 2, 3] }
+        each: item
+      do:
+        - guarded:
+            try:
+              - race:
+                  fork:
+                    compete: true
+                    branches:
+                      - fast:
+                          set:
+                            winner: fast
+                      - slow:
+                          wait:
+                            seconds: 20
+            # Nothing in the try body fails, so the catch must never run. If it
+            # does, it raises and the workflow fails.
+            catch:
+              do:
+                - caught:
+                    raise:
+                      error:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/runtime
+                        status: 500
+                        title: Catch ran
+  - after:
+      set:
+        done: true

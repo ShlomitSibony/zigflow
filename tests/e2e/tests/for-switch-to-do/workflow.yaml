@@ -1,0 +1,24 @@
+document:
+  dsl: 1.0.0
+  taskQueue: for-switch-to-do
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - loop:
+      for:
+        in: ${ [1, 2] }
+        each: number
+      do:
+        - pick:
+            switch:
+              - go:
+                  when: ${ true }
+                  then: target
+        - target:
+            do:
+              - mark:
+                  set:
+                    targeted: true
+  - after:
+      set:
+        after: true

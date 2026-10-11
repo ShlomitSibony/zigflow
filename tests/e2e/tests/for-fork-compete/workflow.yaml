@@ -1,0 +1,27 @@
+document:
+  dsl: 1.0.0
+  taskQueue: for-fork-compete
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - loop:
+      for:
+        in: ${ [1, 2, 3] }
+        each: item
+      do:
+        # Every iteration runs inline in the same workflow, so each run of the
+        # fork starts its branches under the same child workflow IDs. `slow`
+        # loses every race and must have closed before the next one starts.
+        - race:
+            fork:
+              compete: true
+              branches:
+                - fast:
+                    set:
+                      winner: fast
+                - slow:
+                    wait:
+                      seconds: 20
+  - after:
+      set:
+        done: true

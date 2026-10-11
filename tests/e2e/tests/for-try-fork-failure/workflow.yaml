@@ -1,0 +1,41 @@
+document:
+  dsl: 1.0.0
+  taskQueue: for-try-fork-failure
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - loop:
+      for:
+        in: ${ [1, 2, 3] }
+        each: item
+      do:
+        - guarded:
+            try:
+              - race:
+                  fork:
+                    branches:
+                      - bad:
+                          raise:
+                            error:
+                              type: https://serverlessworkflow.io/spec/1.0.0/errors/validation
+                              status: 400
+                              title: Boom
+                      - slow:
+                          wait:
+                            seconds: 15
+            # The catch must receive the error the branch raised. If it receives
+            # the clash of a repeated fork child ID instead, it raises and the
+            # workflow fails.
+            catch:
+              as: error
+              do:
+                - clash:
+                    if: ${ $data.error.message | contains("already started") }
+                    raise:
+                      error:
+                        type: https://serverlessworkflow.io/spec/1.0.0/errors/runtime
+                        status: 500
+                        title: Fork child ID clash
+  - after:
+      set:
+        done: true

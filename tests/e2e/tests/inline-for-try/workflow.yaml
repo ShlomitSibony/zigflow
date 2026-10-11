@@ -1,0 +1,24 @@
+document:
+  dsl: 1.0.0
+  taskQueue: inline-for-try
+  workflowType: workflow
+  version: 0.0.1
+do:
+  - loop:
+      for:
+        in: ${ [1, 2, 3] }
+        each: number
+      do:
+        - guarded:
+            try:
+              - failing:
+                  raise:
+                    error:
+                      type: https://serverlessworkflow.io/spec/1.0.0/errors/validation
+                      status: 400
+                      title: Boom
+            catch:
+              do:
+                - caught:
+                    set:
+                      caught: ${ $data.number }

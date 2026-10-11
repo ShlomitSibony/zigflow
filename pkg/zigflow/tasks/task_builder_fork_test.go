@@ -374,8 +374,8 @@ func TestForkTaskBuilderExecPropagatesCancelledBranchInNonCompetingFork(t *testi
 // losing branches, and those cancellations must not turn a successful
 // fork into a cancellation or a failure.
 //
-// This works without any special-casing because CancelOthers only runs
-// after the await has been satisfied and exec has read the fork state,
+// This works without any special-casing because the losers are only
+// cancelled after the await has been satisfied and exec has read the fork state,
 // so a loser's cancellation is observed after the result is already
 // settled.
 func TestForkTaskBuilderExecCompetingLoserCancellationKeepsWinner(t *testing.T) {
@@ -529,4 +529,92 @@ func TestForkTaskBuilderExecWaitsForBranchCancellationCleanup(t *testing.T) {
 		want = append(want, "cleaned-up "+name)
 	}
 	assert.ElementsMatch(t, want, events)
+}
+
+// runForkExecTwice runs the same fork twice in one host workflow, as a for
+// loop does now that its iterations run inline. Both runs share the host's
+// workflow ID, so they also share the child workflow IDs of their branches.
+// The error from each run is returned so a test can check the second run
+// was not rejected because a branch from the first run was still open.
+func runForkExecTwice(
+	t *testing.T,
+	compete bool,
+	branches map[string]forkBranch,
+) (runErrs []error, workflowErr error) {
+	t.Helper()
+
+	forkedTasks := make([]*forkedTask, 0, len(branches))
+	for name := range branches {
+		forkedTasks = append(forkedTasks, &forkedTask{
+			task:              &model.TaskItem{Key: name},
+			childWorkflowName: "fork-" + name,
+			taskName:          name,
+		})
+	}
+
+	builder := &ForkTaskBuilder{
+		name: "fork-task-twice",
+		task: &model.ForkTask{Fork: model.ForkTaskConfiguration{Compete: compete}},
+	}
+	fn, err := builder.exec(forkedTasks)
+	require.NoError(t, err)
+
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	for _, ft := range forkedTasks {
+		env.RegisterWorkflowWithOptions(branches[ft.taskName], workflow.RegisterOptions{Name: ft.childWorkflowName})
+	}
+
+	env.RegisterWorkflowWithOptions(func(ctx workflow.Context) error {
+		for range 2 {
+			_, err := fn(ctx, nil, utils.NewState())
+			runErrs = append(runErrs, err)
+		}
+		return nil
+	}, workflow.RegisterOptions{Name: "fork-twice-host"})
+
+	env.ExecuteWorkflow("fork-twice-host")
+	return runErrs, env.GetWorkflowError()
+}
+
+// TestForkTaskBuilderExecCompetingForkRunsAgain covers a competing fork in a
+// loop body. The fork must not return until its cancelled losers have closed,
+// or the next run starts a branch whose child workflow ID is still in use.
+func TestForkTaskBuilderExecCompetingForkRunsAgain(t *testing.T) {
+	runErrs, workflowErr := runForkExecTwice(t, true, map[string]forkBranch{
+		"quick": func(_ workflow.Context, _ any, _ *utils.State) (map[string]any, error) {
+			return map[string]any{testConstValue: "quick"}, nil
+		},
+		"stalled": func(ctx workflow.Context, _ any, _ *utils.State) (map[string]any, error) {
+			return nil, workflow.Sleep(ctx, time.Hour)
+		},
+	})
+
+	require.NoError(t, workflowErr)
+	require.Len(t, runErrs, 2)
+	for i, err := range runErrs {
+		assert.NoError(t, err, "run %d of the competing fork must succeed", i+1)
+	}
+}
+
+// TestForkTaskBuilderExecFailedForkRunsAgain covers a failed fork in a loop
+// body whose error is caught. A branch still running when another fails must
+// be cancelled and closed before the fork returns, so the next run fails with
+// the branch's own error rather than with a child workflow ID clash.
+func TestForkTaskBuilderExecFailedForkRunsAgain(t *testing.T) {
+	runErrs, workflowErr := runForkExecTwice(t, false, map[string]forkBranch{
+		"boom": func(_ workflow.Context, _ any, _ *utils.State) (map[string]any, error) {
+			return nil, errors.New("genuine branch failure")
+		},
+		"slow": func(ctx workflow.Context, _ any, _ *utils.State) (map[string]any, error) {
+			return nil, workflow.Sleep(ctx, time.Hour)
+		},
+	})
+
+	require.NoError(t, workflowErr)
+	require.Len(t, runErrs, 2)
+	for i, err := range runErrs {
+		require.Error(t, err, "run %d of the fork must fail", i+1)
+		assert.Contains(t, err.Error(), "genuine branch failure", "run %d", i+1)
+	}
 }

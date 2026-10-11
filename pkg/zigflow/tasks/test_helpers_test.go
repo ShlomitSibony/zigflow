@@ -90,8 +90,10 @@ const (
 	testConstStep = "step"
 	// testConstItemValue is the sample item string used in for-task iterator tests.
 	testConstItemValue = "item-value"
-	// testConstChildValue is the child output key used in for-task iterator tests.
-	testConstChildValue = "child_value"
+	// testConstBodyValue is the loop body output key used in for-task iterator tests.
+	testConstBodyValue = "body_value"
+	// testConstInnerDo is the name of a do task nested in an inline body.
+	testConstInnerDo = "inner"
 	// testConstLast is the key used to store the last-seen item in context propagation tests.
 	testConstLast = "last"
 	// testConstProcessed is the key used for the processed output in accumulator tests.

@@ -41,7 +41,7 @@ type DoTaskOpts struct {
 	// workflow's Temporal context rather than as a workflow of its own.
 	//
 	// It exists because the workflow context can no longer identify the
-	// logical root boundary on its own: an inline body (a try or catch
+	// logical root boundary on its own: an inline body (a for, try or catch
 	// task list) runs in the same Temporal context as the workflow that
 	// invoked it, so isRootWorkflow(ctx) reports true even though the
 	// builder is logically nested. Nested makes the distinction explicit
@@ -51,10 +51,9 @@ type DoTaskOpts struct {
 	// Build also marks any do task that runs inline in a nested body as
 	// nested, because NewTaskBuilder only gives it the default options.
 	//
-	// It is deliberately separate from DisableRegisterWorkflow: the
-	// for-task also disables registration for its inner body but then
-	// invokes it inside a registered child workflow, where the existing
-	// context-based root detection is still correct.
+	// It is deliberately separate from DisableRegisterWorkflow, which only
+	// controls whether the task list is registered as a workflow and says
+	// nothing about how it executes.
 	Nested           bool
 	Envvars          map[string]any
 	MaxHistoryLength int
@@ -642,9 +641,9 @@ func (t *DoTaskBuilder) applyRedirectResult(task workflowFunc, res any, state *u
 
 // isRootWorkflow reports whether ctx belongs to the topmost workflow in
 // the current execution. Child workflows started via
-// workflow.ExecuteChildWorkflow (redirect targets, for-loop iteration
-// bodies, etc.) have ParentWorkflowExecution set; the original workflow
-// started by the client does not.
+// workflow.ExecuteChildWorkflow (redirect targets, fork branches, etc.) have
+// ParentWorkflowExecution set; the original workflow started by the client
+// does not.
 func isRootWorkflow(ctx workflow.Context) bool {
 	return workflow.GetInfo(ctx).ParentWorkflowExecution == nil
 }

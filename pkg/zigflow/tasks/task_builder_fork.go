@@ -258,6 +258,7 @@ func (t *ForkTaskBuilder) exec(forkedTasks []*forkedTask) (TemporalWorkflowFunc,
 		logger.Debug("Forked task has completed")
 
 		if fs.replyErr != nil {
+			cancelBranchesAndAwait(ctx, forkedTasks, futures)
 			return nil, fs.replyErr
 		}
 
@@ -272,11 +273,26 @@ func (t *ForkTaskBuilder) exec(forkedTasks []*forkedTask) (TemporalWorkflowFunc,
 
 		if isCompeting {
 			logger.Debug("Cancelling other forked workflows")
-			futures.CancelOthers(fs.winningCtx)
+			cancelBranchesAndAwait(ctx, forkedTasks, futures)
 		}
 
 		return output, nil
 	}, nil
+}
+
+// cancelBranchesAndAwait cancels every branch still running and waits for
+// them to close. Branch child workflow IDs are built from the workflow ID and
+// the branch name, so a later fork in the same workflow, such as the next
+// iteration of a for loop, reuses them, and starting a branch that is still
+// open fails with "child workflow execution already started". Branches are
+// cancelled in declaration order so that the cancel commands are the same on
+// replay. Cancelling a branch that has already closed is a no-op.
+func cancelBranchesAndAwait(ctx workflow.Context, forkedTasks []*forkedTask, futures *utils.CancellableFutures) {
+	branches := futures.List()
+	for _, branch := range forkedTasks {
+		branches[branch.taskName].Cancel()
+	}
+	awaitBranchesCancelled(ctx, futures)
 }
 
 // awaitBranchesCancelled blocks until every branch future has resolved.
@@ -349,12 +365,11 @@ func (t *ForkTaskBuilder) handleBranchError(
 	// cancellation semantics intact.
 	//
 	// Intentional cancellation of losing branches in a competing fork
-	// needs no special case here. CancelOthers only runs once a winner
-	// has already satisfied the await, so exec has read fs and returned
-	// before any loser observes its cancellation; what this records for
-	// a loser is never read. Returning true also keeps a cancelled
-	// branch out of recordReply, so it cannot contribute to (or mutate)
-	// the output the fork has already returned.
+	// needs no special case here. The losers are only cancelled once a
+	// winner has satisfied the await and exec has read fs, so what this
+	// records for a loser is never read. Returning true also keeps a
+	// cancelled branch out of recordReply, so it cannot contribute to (or
+	// mutate) the output the fork returns.
 	if temporal.IsCanceledError(err) {
 		logger.Debug("Forked task cancelled", "task", taskName)
 		if fs.replyErr == nil {
