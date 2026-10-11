@@ -242,35 +242,6 @@ func TestTryTaskBuilderExecPropagatesEndFromCatchBody(t *testing.T) {
 		"catch-emitted end must not be wrapped as a catch failure")
 }
 
-// TestTryTaskBuilderExecPropagatesEncodedEndCompat proves the retained
-// backwards-compatibility path: an encoded Temporal end error (as produced by
-// flow.NewEndApplicationError) is still recognised, its carried payload output
-// preserved, and the catch body skipped. This is not the primary inline path.
-func TestTryTaskBuilderExecPropagatesEncodedEndCompat(t *testing.T) {
-	builder := newInlineTryBuilder("")
-
-	encodedOutput := map[string]any{testConstValue: "encoded-end-output"}
-	catchRan := false
-
-	tryFn := func(ctx workflow.Context, input any, st *utils.State) (any, error) {
-		return nil, flow.NewEndApplicationError(encodedOutput)
-	}
-	catchFn := func(ctx workflow.Context, input any, st *utils.State) (any, error) {
-		catchRan = true
-		return nil, nil
-	}
-
-	fn, err := builder.exec(tryFn, catchFn)
-	require.NoError(t, err)
-
-	output, execErr := runInlineTry(t, fn, nil, utils.NewState())
-
-	require.Error(t, execErr)
-	assert.True(t, errors.Is(execErr, flow.ErrEnd), "encoded end must surface as flow.ErrEnd")
-	assert.Equal(t, encodedOutput, output, "encoded end payload output must be preserved")
-	assert.False(t, catchRan, "catch body must not run when the try body signalled end")
-}
-
 // runCatchAndCaptureState executes a try task whose try body fails, then
 // returns the $data the catch body actually observed alongside the parent
 // state exec was handed and the input the catch body received. The catch body

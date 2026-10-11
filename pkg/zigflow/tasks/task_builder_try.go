@@ -267,13 +267,7 @@ func (t *TryTaskBuilder) exec(tryFn, catchFn TemporalWorkflowFunc) (TemporalWork
 			// reflects it. Crucially, this skips the catch handler.
 			//
 			// The try body runs inline, so it returns flow.ErrEnd directly
-			// alongside its output. The DecodeEndApplicationError branch is
-			// retained for backwards compatibility with an encoded end error
-			// that may still arrive from a Temporal boundary.
-			if endPayload, isEnd := flow.DecodeEndApplicationError(err); isEnd {
-				logger.Info("Try body signalled end; propagating without running catch", "carriedOutput", endPayload.Output)
-				return t.propagateEnd(state, endPayload.Output)
-			}
+			// alongside its output.
 			if errors.Is(err, flow.ErrEnd) {
 				logger.Info("Try body signalled end; propagating without running catch", "carriedOutput", output)
 				return t.propagateEnd(state, output)
@@ -306,12 +300,7 @@ func (t *TryTaskBuilder) exec(tryFn, catchFn TemporalWorkflowFunc) (TemporalWork
 				// The catch handler itself may emit `then: end`. Propagate
 				// that as flow.ErrEnd rather than wrapping it as a generic
 				// catch failure. As with the try body, the inline catch
-				// returns flow.ErrEnd directly; the decode branch stays for
-				// backwards compatibility with an encoded end error.
-				if endPayload, isEnd := flow.DecodeEndApplicationError(err); isEnd {
-					logger.Info("Catch body signalled end; propagating", "carriedOutput", endPayload.Output)
-					return t.propagateEnd(state, endPayload.Output)
-				}
+				// returns flow.ErrEnd directly.
 				if errors.Is(err, flow.ErrEnd) {
 					logger.Info("Catch body signalled end; propagating", "carriedOutput", output)
 					return t.propagateEnd(state, output)
